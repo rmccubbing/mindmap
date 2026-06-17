@@ -1,594 +1,614 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Plus, Trash2, Type, ZoomIn, ZoomOut, BookOpen, Lightbulb, Quote, MessageSquare, Maximize, LayoutTemplate, Download, ChevronDown, Upload, Cloud, CloudOff
-} from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
-
-// --- Firebase Setup ---
-let app, auth, db, appId;
-try {
-  const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-  if (firebaseConfig) {
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-    appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-  }
-} catch (e) { console.error("Firebase init error", e); }
-
-const NODE_TYPES = {
-  THESIS: { id: 'thesis', label: 'Central Thesis', icon: BookOpen, bgColor: 'bg-indigo-600', textColor: 'text-white', borderColor: 'border-indigo-800' },
-  ARGUMENT: { id: 'argument', label: 'Main Argument', icon: Lightbulb, bgColor: 'bg-emerald-500', textColor: 'text-white', borderColor: 'border-emerald-700' },
-  EVIDENCE: { id: 'evidence', label: 'Evidence/Quote', icon: Quote, bgColor: 'bg-amber-100', textColor: 'text-amber-900', borderColor: 'border-amber-400' },
-  ANALYSIS: { id: 'analysis', label: 'Analysis/Reasoning', icon: MessageSquare, bgColor: 'bg-fuchsia-100', textColor: 'text-fuchsia-900', borderColor: 'border-fuchsia-400' },
-  GENERAL: { id: 'general', label: 'Idea', icon: Type, bgColor: 'bg-white', textColor: 'text-slate-800', borderColor: 'border-slate-300' }
-};
-
-const INITIAL_NODE = {
-  id: 'root',
-  text: 'My Essay Topic or Central Thesis',
-  x: 0,
-  y: 0,
-  type: 'THESIS',
-  parentId: null
-};
-
-const TEMPLATES = {
-  ARGUMENTATIVE: {
-    name: 'Argumentative Essay',
-    nodes: [
-      { id: 'root', text: 'Main Thesis Statement', x: 0, y: 0, type: 'THESIS', parentId: null },
-      { id: 'arg1', text: 'Body Paragraph 1', x: 300, y: -200, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'ev1_1', text: 'Supporting Quote 1', x: 600, y: -250, type: 'EVIDENCE', parentId: 'arg1' },
-      { id: 'ev1_2', text: 'Supporting Quote 2', x: 600, y: -150, type: 'EVIDENCE', parentId: 'arg1' },
-      { id: 'arg2', text: 'Body Paragraph 2', x: 300, y: 0, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'ev2_1', text: 'Supporting Evidence', x: 600, y: -50, type: 'EVIDENCE', parentId: 'arg2' },
-      { id: 'an2_1', text: 'Analysis of evidence', x: 600, y: 50, type: 'ANALYSIS', parentId: 'arg2' },
-      { id: 'arg3', text: 'Body Paragraph 3', x: 300, y: 200, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'ev3_1', text: 'Counter-argument / Evidence', x: 600, y: 200, type: 'EVIDENCE', parentId: 'arg3' },
-    ]
-  },
-  COMPARE_CONTRAST: {
-    name: 'Compare & Contrast',
-    nodes: [
-      { id: 'root', text: 'Main Thesis: A vs B', x: 0, y: 0, type: 'THESIS', parentId: null },
-      { id: 'subA', text: 'Subject A Characteristics', x: 300, y: -150, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'evA1', text: 'Point of Comparison 1', x: 600, y: -200, type: 'EVIDENCE', parentId: 'subA' },
-      { id: 'evA2', text: 'Point of Comparison 2', x: 600, y: -100, type: 'EVIDENCE', parentId: 'subA' },
-      { id: 'subB', text: 'Subject B Characteristics', x: 300, y: 150, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'evB1', text: 'Point of Comparison 1', x: 600, y: 100, type: 'EVIDENCE', parentId: 'subB' },
-      { id: 'evB2', text: 'Point of Comparison 2', x: 600, y: 200, type: 'EVIDENCE', parentId: 'subB' },
-    ]
-  },
-  NARRATIVE: {
-    name: 'Narrative Arc',
-    nodes: [
-      { id: 'root', text: 'Story Theme / Core Message', x: 0, y: 0, type: 'THESIS', parentId: null },
-      { id: 'exp', text: 'Exposition (Setting/Chars)', x: 300, y: -200, type: 'GENERAL', parentId: 'root' },
-      { id: 'rise', text: 'Rising Action (Conflict)', x: 300, y: -60, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'clim', text: 'Climax (Turning Point)', x: 300, y: 60, type: 'EVIDENCE', parentId: 'root' },
-      { id: 'fall', text: 'Resolution / Falling Action', x: 300, y: 200, type: 'ANALYSIS', parentId: 'root' },
-    ]
-  },
-  DBQ: {
-    name: 'DBQ / Source Analysis',
-    nodes: [
-      { id: 'root', text: 'Historical Claim', x: 0, y: 0, type: 'THESIS', parentId: null },
-      { id: 'arg1', text: 'Thematic Group 1', x: 300, y: -150, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'doc1', text: 'Document A Evidence', x: 600, y: -200, type: 'EVIDENCE', parentId: 'arg1' },
-      { id: 'an1', text: 'Author POV / Context', x: 600, y: -100, type: 'ANALYSIS', parentId: 'arg1' },
-      { id: 'arg2', text: 'Thematic Group 2', x: 300, y: 150, type: 'ARGUMENT', parentId: 'root' },
-      { id: 'doc2', text: 'Document B Evidence', x: 600, y: 100, type: 'EVIDENCE', parentId: 'arg2' },
-      { id: 'an2', text: 'Author POV / Context', x: 600, y: 200, type: 'ANALYSIS', parentId: 'arg2' },
-    ]
-  }
-};
-
-export default function EssayMap() {
-  const [nodes, setNodes] = useState([INITIAL_NODE]);
-  const [selectedNodeId, setSelectedNodeId] = useState('root');
-  const [editingNodeId, setEditingNodeId] = useState(null);
-  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
-  
-  // Workspace Transformations (Pan and Zoom)
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const workspaceRef = useRef(null);
-
-  // --- Data Sync & Persistence ---
-  const [user, setUser] = useState(null);
-  const [syncStatus, setSyncStatus] = useState(db ? 'offline' : 'local-only');
-  const isFirstLoad = useRef(true);
-  const fileInputRef = useRef(null);
-
-  // 1. Initialize Authentication
-  useEffect(() => {
-    if (!auth) return;
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (e) { console.error("Auth error", e); }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
-
-  // 2. Load Data from Cloud on Startup
-  useEffect(() => {
-    if (!user || !db) return;
-    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'maps', 'currentMap');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EssayMap - Student Mind Mapper</title>
     
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists() && isFirstLoad.current) {
-        const data = docSnap.data();
-        if (data.nodes) setNodes(data.nodes);
-        if (data.pan) setPan(data.pan);
-        if (data.zoom) setZoom(data.zoom);
-      }
-      isFirstLoad.current = false;
-    }, (err) => console.error("Snapshot error:", err));
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    return () => unsubscribe();
-  }, [user]);
-
-  // 3. Auto-Save to Cloud on Changes (Debounced)
-  useEffect(() => {
-    if (!user || !db || isFirstLoad.current) return;
-    setSyncStatus('syncing');
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    const timer = setTimeout(async () => {
-      try {
-        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'maps', 'currentMap');
-        await setDoc(docRef, { nodes, pan, zoom, updatedAt: new Date().toISOString() });
-        setSyncStatus('synced');
-      } catch (e) {
-        console.error("Save error:", e);
-        setSyncStatus('offline');
-      }
-    }, 1500); 
-    return () => clearTimeout(timer);
-  }, [nodes, pan, zoom, user]);
-
-  // 4. Local File Export / Import (For Google Drive)
-  const exportMap = () => {
-    const dataStr = JSON.stringify({ nodes, pan, zoom });
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    const exportFileDefaultName = `essay_map_${new Date().toISOString().split('T')[0]}.json`;
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
-  };
-
-  const importMap = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = JSON.parse(e.target.result);
-        if (data.nodes) setNodes(data.nodes);
-        if (data.pan) setPan(data.pan);
-        if (data.zoom) setZoom(data.zoom);
-        setSelectedNodeId('root');
-        isFirstLoad.current = false; // Prevent cloud fetch from overwriting import
-      } catch (err) {
-        console.error("Invalid file");
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = null; // Reset input
-  };
-
-  // Interaction State
-  const [isDraggingNode, setIsDraggingNode] = useState(false);
-  const [isPanningWorkspace, setIsPanningWorkspace] = useState(false);
-  const dragInfo = useRef({ startX: 0, startY: 0, initialNodeX: 0, initialNodeY: 0, initialPanX: 0, initialPanY: 0 });
-
-  // Focus effect for editing
-  const editInputRef = useRef(null);
-  useEffect(() => {
-    if (editingNodeId && editInputRef.current) {
-      editInputRef.current.focus();
-      editInputRef.current.select();
-    }
-  }, [editingNodeId]);
-
-  const generateId = () => Math.random().toString(36).substr(2, 9);
-
-  const addNode = (typeKey) => {
-    const parentNode = nodes.find(n => n.id === (selectedNodeId || 'root')) || nodes[0];
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     
-    // Calculate a good position for the new node (to the right, slightly offset randomly)
-    const siblings = nodes.filter(n => n.parentId === parentNode.id);
-    const yOffset = (siblings.length * 80) - ((siblings.length > 0 ? siblings.length - 1 : 0) * 40);
-    
-    const newNode = {
-      id: generateId(),
-      text: NODE_TYPES[typeKey].label,
-      x: parentNode.x + 250,
-      y: parentNode.y + yOffset + (Math.random() * 40 - 20), // Slight random jitter
-      type: typeKey,
-      parentId: parentNode.id
-    };
-    
-    setNodes([...nodes, newNode]);
-    setSelectedNodeId(newNode.id);
-    setEditingNodeId(newNode.id); // Auto-edit new nodes
-  };
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
-  const deleteNode = () => {
-    if (!selectedNodeId || selectedNodeId === 'root') return; // Protect root
-    
-    // Recursive function to get all descendants
-    const getDescendants = (parentId, currentNodes) => {
-      const children = currentNodes.filter(n => n.parentId === parentId);
-      let descendants = [...children];
-      children.forEach(child => {
-        descendants = [...descendants, ...getDescendants(child.id, currentNodes)];
-      });
-      return descendants;
-    };
-
-    const nodesToDelete = [selectedNodeId, ...getDescendants(selectedNodeId, nodes).map(n => n.id)];
-    setNodes(nodes.filter(n => !nodesToDelete.includes(n.id)));
-    setSelectedNodeId('root');
-  };
-
-  const updateNodeText = (id, newText) => {
-    setNodes(nodes.map(n => n.id === id ? { ...n, text: newText } : n));
-  };
-
-  const loadTemplate = (templateKey) => {
-    setNodes(TEMPLATES[templateKey].nodes);
-    setSelectedNodeId('root');
-    setPan({ x: 0, y: 0 }); // Reset pan
-    setZoom(0.8); // Zoom out slightly to see the whole template
-    setShowTemplateMenu(false);
-  };
-
-  const centerWorkspace = () => {
-    setPan({ x: 0, y: 0 });
-    setZoom(1);
-  };
-
-  const handlePointerDown = (e, nodeId = null) => {
-    if (e.button !== 0) return; // Only left click
-
-    setShowTemplateMenu(false);
-
-    if (nodeId) {
-      e.stopPropagation();
-      if (editingNodeId !== nodeId) setEditingNodeId(null);
-      setSelectedNodeId(nodeId);
-      setIsDraggingNode(true);
-      
-      const node = nodes.find(n => n.id === nodeId);
-      dragInfo.current = {
-        startX: e.clientX,
-        startY: e.clientY,
-        initialNodeX: node.x,
-        initialNodeY: node.y
-      };
-    } else {
-      // Background click
-      if (editingNodeId) setEditingNodeId(null);
-      setSelectedNodeId(null);
-      setIsPanningWorkspace(true);
-      dragInfo.current = {
-        startX: e.clientX,
-        startY: e.clientY,
-        initialPanX: pan.x,
-        initialPanY: pan.y
-      };
-    }
-  };
-
-  const handlePointerMove = useCallback((e) => {
-    if (isDraggingNode && selectedNodeId) {
-      const dx = (e.clientX - dragInfo.current.startX) / zoom;
-      const dy = (e.clientY - dragInfo.current.startY) / zoom;
-      
-      setNodes(prevNodes => prevNodes.map(n => 
-        n.id === selectedNodeId 
-          ? { ...n, x: dragInfo.current.initialNodeX + dx, y: dragInfo.current.initialNodeY + dy } 
-          : n
-      ));
-    } else if (isPanningWorkspace) {
-      const dx = e.clientX - dragInfo.current.startX;
-      const dy = e.clientY - dragInfo.current.startY;
-      setPan({
-        x: dragInfo.current.initialPanX + dx,
-        y: dragInfo.current.initialPanY + dy
-      });
-    }
-  }, [isDraggingNode, isPanningWorkspace, selectedNodeId, zoom]);
-
-  const handlePointerUp = useCallback(() => {
-    setIsDraggingNode(false);
-    setIsPanningWorkspace(false);
-  }, []);
-
-  useEffect(() => {
-    if (isDraggingNode || isPanningWorkspace) {
-      window.addEventListener('pointermove', handlePointerMove);
-      window.addEventListener('pointerup', handlePointerUp);
-    }
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-  }, [isDraggingNode, isPanningWorkspace, handlePointerMove, handlePointerUp]);
-
-  // Handle keyboard shortcuts (Delete key)
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId && !editingNodeId) {
-        deleteNode();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeId, editingNodeId, nodes]);
-
-  const renderConnections = () => {
-    return nodes.map(node => {
-      if (!node.parentId) return null;
-      const parent = nodes.find(n => n.id === node.parentId);
-      if (!parent) return null;
-
-      // Calculate connection points (from right edge of parent to left edge of child)
-      // Approximate node widths based on padding and text (simplified for this app)
-      const parentWidth = 160; 
-      const startX = parent.x + (parentWidth / 2);
-      const startY = parent.y;
-      const endX = node.x - (parentWidth / 2) + 20; // Slight offset for visual flow
-      const endY = node.y;
-
-      // Create a smooth Bezier curve
-      const controlPointOffset = Math.max(Math.abs(endX - startX) / 2, 50);
-      const pathData = `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`;
-
-      return (
-        <path
-          key={`conn-${node.id}`}
-          d={pathData}
-          fill="none"
-          stroke="#cbd5e1"
-          strokeWidth="3"
-          className="transition-all duration-200"
-        />
-      );
-    });
-  };
-
-  return (
-    <div className="flex flex-col h-screen w-full bg-slate-50 font-sans overflow-hidden">
-      
-      {/* Top Navigation / Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-3 flex justify-between items-center z-10 shadow-sm">
-        <div className="flex items-center gap-2">
-          <div className="bg-indigo-600 p-2 rounded-lg text-white">
-            <BookOpen size={20} />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-800 leading-tight">EssayMap</h1>
-            <p className="text-xs text-slate-500 font-medium">Visual Organizer for Humanities</p>
-          </div>
-        </div>
-
-        {}
-        <div className="flex items-center gap-4">
-          
-          {/* Cloud Sync Status */}
-          {db && (
-            <div className="flex items-center gap-2 text-xs font-medium mr-2" title="Cloud Sync">
-              {syncStatus === 'synced' && <><Cloud size={14} className="text-emerald-500" /><span className="text-emerald-600 hidden md:inline">Saved</span></>}
-              {syncStatus === 'syncing' && <><Cloud size={14} className="text-amber-500 animate-pulse" /><span className="text-amber-600 hidden md:inline">Saving...</span></>}
-              {syncStatus === 'offline' && <><CloudOff size={14} className="text-slate-400" /><span className="text-slate-500 hidden md:inline">Offline</span></>}
-            </div>
-          )}
-
-          {/* Import / Export Controls */}
-          <div className="flex items-center bg-slate-100 rounded-md p-1 shadow-inner border border-slate-200">
-             <input type="file" accept=".json" ref={fileInputRef} onChange={importMap} className="hidden" />
-             <button onClick={() => fileInputRef.current?.click()} className="p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors" title="Load File from Computer/Drive">
-                <Upload size={16} />
-             </button>
-             <div className="w-px h-4 bg-slate-300 mx-1"></div>
-             <button onClick={exportMap} className="p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors" title="Download File (to save to Google Drive)">
-                <Download size={16} />
-             </button>
-          </div>
-
-          <div className="relative">
-            <button 
-              onClick={() => setShowTemplateMenu(!showTemplateMenu)}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md font-medium text-sm transition-colors border border-slate-200"
-            >
-              <LayoutTemplate size={16} />
-              Templates
-              <ChevronDown size={14} className={`transition-transform ${showTemplateMenu ? 'rotate-180' : ''}`} />
-            </button>
-            
-            {showTemplateMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg border border-slate-200 py-1 z-50">
-                {Object.entries(TEMPLATES).map(([key, template]) => (
-                  <button
-                    key={key}
-                    onClick={() => loadTemplate(key)}
-                    className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
-                  >
-                    {template.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* Main Workspace Area */}
-      <div className="flex flex-1 overflow-hidden relative">
+    <style>
+        body { font-family: 'Inter', -apple-system, sans-serif; overflow: hidden; margin: 0; padding: 0; background-color: #f8fafc; }
         
-        {/* Left Sidebar Toolbar (Node Tools) */}
-        <div className="w-16 bg-white border-r border-slate-200 flex flex-col items-center py-4 gap-4 z-10 shadow-sm">
-          <div className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Add</div>
-          
-          {Object.entries(NODE_TYPES).map(([key, type]) => {
-            const Icon = type.icon;
-            // Don't show Thesis in quick add unless no nodes exist
-            if (key === 'THESIS' && nodes.length > 0) return null;
+        /* Custom scrollbar for templates menu */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* Ensure textarea removes default outlines */
+        textarea:focus { outline: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module" data-presets="react">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // Define the types of nodes available to the student
+        const NODE_TYPES = {
+            THESIS: { id: 'thesis', label: 'Central Thesis', icon: 'fa-book-open', bgColor: 'bg-indigo-600', textColor: 'text-white', borderColor: 'border-indigo-800' },
+            ARGUMENT: { id: 'argument', label: 'Main Argument', icon: 'fa-lightbulb', bgColor: 'bg-emerald-500', textColor: 'text-white', borderColor: 'border-emerald-700' },
+            EVIDENCE: { id: 'evidence', label: 'Evidence/Quote', icon: 'fa-quote-right', bgColor: 'bg-amber-100', textColor: 'text-amber-900', borderColor: 'border-amber-400' },
+            ANALYSIS: { id: 'analysis', label: 'Analysis/Reason', icon: 'fa-comment-dots', bgColor: 'bg-fuchsia-100', textColor: 'text-fuchsia-900', borderColor: 'border-fuchsia-400' },
+            GENERAL: { id: 'general', label: 'Idea', icon: 'fa-font', bgColor: 'bg-white', textColor: 'text-slate-800', borderColor: 'border-slate-300' }
+        };
+
+        const INITIAL_NODE = {
+            id: 'root',
+            text: 'My Essay Topic or Central Thesis',
+            x: 0,
+            y: 0,
+            type: 'THESIS',
+            parentId: null
+        };
+
+        // Pre-built essay structures
+        const TEMPLATES = {
+            ARGUMENTATIVE: {
+                name: 'Argumentative Essay',
+                nodes: [
+                    { id: 'root', text: 'Main Thesis Statement', x: 0, y: 0, type: 'THESIS', parentId: null },
+                    { id: 'arg1', text: 'Body Paragraph 1', x: 300, y: -200, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'ev1_1', text: 'Supporting Quote 1', x: 600, y: -250, type: 'EVIDENCE', parentId: 'arg1' },
+                    { id: 'ev1_2', text: 'Supporting Quote 2', x: 600, y: -150, type: 'EVIDENCE', parentId: 'arg1' },
+                    { id: 'arg2', text: 'Body Paragraph 2', x: 300, y: 0, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'ev2_1', text: 'Supporting Evidence', x: 600, y: -50, type: 'EVIDENCE', parentId: 'arg2' },
+                    { id: 'an2_1', text: 'Analysis of evidence', x: 600, y: 50, type: 'ANALYSIS', parentId: 'arg2' },
+                    { id: 'arg3', text: 'Body Paragraph 3', x: 300, y: 200, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'ev3_1', text: 'Counter-argument / Evidence', x: 600, y: 200, type: 'EVIDENCE', parentId: 'arg3' },
+                ]
+            },
+            COMPARE_CONTRAST: {
+                name: 'Compare & Contrast',
+                nodes: [
+                    { id: 'root', text: 'Main Thesis: A vs B', x: 0, y: 0, type: 'THESIS', parentId: null },
+                    { id: 'subA', text: 'Subject A Characteristics', x: 300, y: -150, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'evA1', text: 'Point of Comparison 1', x: 600, y: -200, type: 'EVIDENCE', parentId: 'subA' },
+                    { id: 'evA2', text: 'Point of Comparison 2', x: 600, y: -100, type: 'EVIDENCE', parentId: 'subA' },
+                    { id: 'subB', text: 'Subject B Characteristics', x: 300, y: 150, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'evB1', text: 'Point of Comparison 1', x: 600, y: 100, type: 'EVIDENCE', parentId: 'subB' },
+                    { id: 'evB2', text: 'Point of Comparison 2', x: 600, y: 200, type: 'EVIDENCE', parentId: 'subB' },
+                ]
+            },
+            NARRATIVE: {
+                name: 'Narrative Arc',
+                nodes: [
+                    { id: 'root', text: 'Story Theme / Core Message', x: 0, y: 0, type: 'THESIS', parentId: null },
+                    { id: 'exp', text: 'Exposition (Setting/Chars)', x: 300, y: -200, type: 'GENERAL', parentId: 'root' },
+                    { id: 'rise', text: 'Rising Action (Conflict)', x: 300, y: -60, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'clim', text: 'Climax (Turning Point)', x: 300, y: 60, type: 'EVIDENCE', parentId: 'root' },
+                    { id: 'fall', text: 'Resolution / Falling Action', x: 300, y: 200, type: 'ANALYSIS', parentId: 'root' },
+                ]
+            },
+            DBQ: {
+                name: 'DBQ / Source Analysis',
+                nodes: [
+                    { id: 'root', text: 'Historical Claim', x: 0, y: 0, type: 'THESIS', parentId: null },
+                    { id: 'arg1', text: 'Thematic Group 1', x: 300, y: -150, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'doc1', text: 'Document A Evidence', x: 600, y: -200, type: 'EVIDENCE', parentId: 'arg1' },
+                    { id: 'an1', text: 'Author POV / Context', x: 600, y: -100, type: 'ANALYSIS', parentId: 'arg1' },
+                    { id: 'arg2', text: 'Thematic Group 2', x: 300, y: 150, type: 'ARGUMENT', parentId: 'root' },
+                    { id: 'doc2', text: 'Document B Evidence', x: 600, y: 100, type: 'EVIDENCE', parentId: 'arg2' },
+                    { id: 'an2', text: 'Author POV / Context', x: 600, y: 200, type: 'ANALYSIS', parentId: 'arg2' },
+                ]
+            }
+        };
+
+        const LOCAL_STORAGE_KEY = 'essaymap_webapp_data';
+
+        function App() {
+            // Data State
+            const [nodes, setNodes] = useState([INITIAL_NODE]);
+            const [selectedNodeId, setSelectedNodeId] = useState('root');
+            const [editingNodeId, setEditingNodeId] = useState(null);
             
-            return (
-              <button
-                key={key}
-                onClick={() => addNode(key)}
-                className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all hover:scale-105 active:scale-95 group relative
-                  ${type.bgColor} ${type.textColor} shadow-sm hover:shadow-md border border-transparent`}
-                title={`Add ${type.label}`}
-              >
-                <Icon size={20} />
-                {/* Tooltip */}
-                <div className="absolute left-full ml-2 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50">
-                  Add {type.label}
-                </div>
-              </button>
-            );
-          })}
+            // UI State
+            const [showTemplateMenu, setShowTemplateMenu] = useState(false);
+            const [pan, setPan] = useState({ x: 0, y: 0 });
+            const [zoom, setZoom] = useState(1);
+            const [syncStatus, setSyncStatus] = useState('synced');
+            const [notification, setNotification] = useState(null);
 
-          <div className="w-8 h-px bg-slate-200 my-2"></div>
-          
-          <button 
-            onClick={deleteNode}
-            disabled={!selectedNodeId || selectedNodeId === 'root'}
-            className="p-3 rounded-xl text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent transition-colors group relative"
-          >
-            <Trash2 size={20} />
-            <div className="absolute left-full ml-2 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50">
-              Delete Node (Del)
-            </div>
-          </button>
-        </div>
+            // Refs
+            const workspaceRef = useRef(null);
+            const fileInputRef = useRef(null);
+            const isFirstLoad = useRef(true);
+            const dragInfo = useRef({ startX: 0, startY: 0, initialNodeX: 0, initialNodeY: 0, initialPanX: 0, initialPanY: 0 });
+            const editInputRef = useRef(null);
 
-        {/* The Interactive Canvas Workspace */}
-        <div 
-          ref={workspaceRef}
-          className={`flex-1 relative overflow-hidden bg-slate-50 outline-none
-            ${isPanningWorkspace ? 'cursor-grabbing' : 'cursor-grab'}`}
-          onPointerDown={(e) => handlePointerDown(e)}
-          // Center content by offsetting 50% of container width/height logically
-        >
-          {/* Grid Background Pattern */}
-          <div 
-            className="absolute inset-0 opacity-20 pointer-events-none"
-            style={{
-              backgroundImage: 'radial-gradient(circle at 2px 2px, #94a3b8 1px, transparent 0)',
-              backgroundSize: `${40 * zoom}px ${40 * zoom}px`,
-              backgroundPosition: `${pan.x}px ${pan.y}px`
-            }}
-          />
+            // Interaction State
+            const [isDraggingNode, setIsDraggingNode] = useState(false);
+            const [isPanningWorkspace, setIsPanningWorkspace] = useState(false);
 
-          {/* Transform Layer for Pan/Zoom */}
-          <div 
-            className="absolute top-1/2 left-1/2 w-0 h-0"
-            style={{ 
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: '0 0'
-            }}
-          >
-            {/* SVG Connections Layer */}
-            <svg className="absolute overflow-visible pointer-events-none" style={{ zIndex: 0 }}>
-              {renderConnections()}
-            </svg>
+            // Load from Local Storage on mount
+            useEffect(() => {
+                const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+                if (savedData) {
+                    try {
+                        const data = JSON.parse(savedData);
+                        if (data.nodes && data.nodes.length > 0) setNodes(data.nodes);
+                        if (data.pan) setPan(data.pan);
+                        if (data.zoom) setZoom(data.zoom);
+                    } catch (e) {
+                        console.error("Failed to parse saved map", e);
+                    }
+                }
+            }, []);
 
-            {/* HTML Nodes Layer */}
-            {nodes.map(node => {
-              const typeStyle = NODE_TYPES[node.type] || NODE_TYPES.GENERAL;
-              const Icon = typeStyle.icon;
-              const isSelected = selectedNodeId === node.id;
-              const isEditing = editingNodeId === node.id;
+            // Auto-save to Local Storage
+            useEffect(() => {
+                if (isFirstLoad.current) {
+                    isFirstLoad.current = false;
+                    return;
+                }
+                setSyncStatus('syncing');
+                const timer = setTimeout(() => {
+                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ nodes, pan, zoom }));
+                    setSyncStatus('synced');
+                }, 800);
+                return () => clearTimeout(timer);
+            }, [nodes, pan, zoom]);
 
-              return (
-                <div
-                  key={node.id}
-                  className={`absolute flex flex-col items-center justify-center p-4 rounded-xl shadow-md border-2 transition-shadow
-                    ${typeStyle.bgColor} ${typeStyle.textColor} ${isSelected ? `ring-4 ring-blue-300 ${typeStyle.borderColor}` : 'border-transparent'}
-                    hover:shadow-lg ${isDraggingNode && isSelected ? 'cursor-grabbing shadow-xl z-50 scale-105' : 'cursor-pointer z-10'}
-                  `}
-                  style={{
-                    transform: `translate(calc(-50% + ${node.x}px), calc(-50% + ${node.y}px))`,
-                    width: '180px',
-                    minHeight: '80px',
-                    userSelect: 'none'
-                  }}
-                  onPointerDown={(e) => handlePointerDown(e, node.id)}
-                  onDoubleClick={(e) => {
+            // Focus textarea when editing starts
+            useEffect(() => {
+                if (editingNodeId && editInputRef.current) {
+                    editInputRef.current.focus();
+                    editInputRef.current.select();
+                }
+            }, [editingNodeId]);
+
+            // Notification Helper
+            const showNotification = (message, isError = false) => {
+                setNotification({ message, isError });
+                setTimeout(() => setNotification(null), 3000);
+            };
+
+            const exportMap = () => {
+                const dataStr = JSON.stringify({ nodes, pan, zoom });
+                const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+                const exportFileDefaultName = `essay_map_${new Date().toISOString().split('T')[0]}.json`;
+                const linkElement = document.createElement('a');
+                linkElement.setAttribute('href', dataUri);
+                linkElement.setAttribute('download', exportFileDefaultName);
+                linkElement.click();
+                showNotification("File downloaded! You can save this to Google Drive.");
+            };
+
+            const importMap = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        if (data.nodes) setNodes(data.nodes);
+                        if (data.pan) setPan(data.pan);
+                        if (data.zoom) setZoom(data.zoom);
+                        setSelectedNodeId('root');
+                        showNotification("Map loaded successfully!");
+                    } catch (err) {
+                        showNotification("Invalid map file format.", true);
+                    }
+                };
+                reader.readAsText(file);
+                event.target.value = null; // Reset input
+            };
+
+            const generateId = () => Math.random().toString(36).substr(2, 9);
+
+            const addNode = (typeKey) => {
+                const parentNode = nodes.find(n => n.id === (selectedNodeId || 'root')) || nodes[0];
+                const siblings = nodes.filter(n => n.parentId === parentNode.id);
+                const yOffset = (siblings.length * 80) - ((siblings.length > 0 ? siblings.length - 1 : 0) * 40);
+                
+                const newNode = {
+                    id: generateId(),
+                    text: NODE_TYPES[typeKey].label,
+                    x: parentNode.x + 250,
+                    y: parentNode.y + yOffset + (Math.random() * 40 - 20),
+                    type: typeKey,
+                    parentId: parentNode.id
+                };
+                setNodes([...nodes, newNode]);
+                setSelectedNodeId(newNode.id);
+                setEditingNodeId(newNode.id);
+            };
+
+            const deleteNode = () => {
+                if (!selectedNodeId || selectedNodeId === 'root') return;
+                
+                // Recursively find all children to delete
+                const getDescendants = (parentId, currentNodes) => {
+                    const children = currentNodes.filter(n => n.parentId === parentId);
+                    let descendants = [...children];
+                    children.forEach(child => {
+                        descendants = [...descendants, ...getDescendants(child.id, currentNodes)];
+                    });
+                    return descendants;
+                };
+
+                const nodesToDelete = [selectedNodeId, ...getDescendants(selectedNodeId, nodes).map(n => n.id)];
+                setNodes(nodes.filter(n => !nodesToDelete.includes(n.id)));
+                setSelectedNodeId('root');
+            };
+
+            const updateNodeText = (id, newText) => {
+                setNodes(nodes.map(n => n.id === id ? { ...n, text: newText } : n));
+            };
+
+            const loadTemplate = (templateKey) => {
+                setNodes(TEMPLATES[templateKey].nodes);
+                setSelectedNodeId('root');
+                setPan({ x: 0, y: 0 });
+                setZoom(0.8);
+                setShowTemplateMenu(false);
+            };
+
+            const centerWorkspace = () => {
+                setPan({ x: 0, y: 0 });
+                setZoom(1);
+            };
+
+            const handlePointerDown = (e, nodeId = null) => {
+                if (e.button !== 0 && e.type !== 'touchstart') return; // Left click or touch only
+                setShowTemplateMenu(false);
+
+                // For touch events, we use touches[0], for mouse we use e
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+                if (nodeId) {
                     e.stopPropagation();
-                    setEditingNodeId(node.id);
-                  }}
-                >
-                  {/* Small Type Indicator Badge */}
-                  <div className="absolute -top-3 flex items-center justify-center w-6 h-6 rounded-full bg-white shadow-sm border border-slate-200 text-slate-600">
-                    <Icon size={12} />
-                  </div>
+                    if (editingNodeId !== nodeId) setEditingNodeId(null);
+                    setSelectedNodeId(nodeId);
+                    setIsDraggingNode(true);
+                    
+                    const node = nodes.find(n => n.id === nodeId);
+                    dragInfo.current = {
+                        startX: clientX,
+                        startY: clientY,
+                        initialNodeX: node.x,
+                        initialNodeY: node.y
+                    };
+                } else {
+                    if (editingNodeId) setEditingNodeId(null);
+                    setSelectedNodeId(null);
+                    setIsPanningWorkspace(true);
+                    dragInfo.current = {
+                        startX: clientX,
+                        startY: clientY,
+                        initialPanX: pan.x,
+                        initialPanY: pan.y
+                    };
+                }
+            };
 
-                  {isEditing ? (
-                    <textarea
-                      ref={editInputRef}
-                      value={node.text}
-                      onChange={(e) => updateNodeText(node.id, e.target.value)}
-                      onBlur={() => setEditingNodeId(null)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          setEditingNodeId(null);
-                        }
-                        e.stopPropagation(); // Prevent trigger map shortcuts
-                      }}
-                      className="w-full h-full min-h-[60px] bg-white/90 text-slate-900 rounded p-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                    />
-                  ) : (
-                    <p className="text-sm font-medium text-center w-full break-words leading-snug pointer-events-none">
-                      {node.text}
-                    </p>
-                  )}
+            const handlePointerMove = useCallback((e) => {
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+                if (isDraggingNode && selectedNodeId) {
+                    const dx = (clientX - dragInfo.current.startX) / zoom;
+                    const dy = (clientY - dragInfo.current.startY) / zoom;
+                    
+                    setNodes(prevNodes => prevNodes.map(n => 
+                        n.id === selectedNodeId 
+                            ? { ...n, x: dragInfo.current.initialNodeX + dx, y: dragInfo.current.initialNodeY + dy } 
+                            : n
+                    ));
+                } else if (isPanningWorkspace) {
+                    const dx = clientX - dragInfo.current.startX;
+                    const dy = clientY - dragInfo.current.startY;
+                    setPan({
+                        x: dragInfo.current.initialPanX + dx,
+                        y: dragInfo.current.initialPanY + dy
+                    });
+                }
+            }, [isDraggingNode, isPanningWorkspace, selectedNodeId, zoom]);
+
+            const handlePointerUp = useCallback(() => {
+                setIsDraggingNode(false);
+                setIsPanningWorkspace(false);
+            }, []);
+
+            useEffect(() => {
+                if (isDraggingNode || isPanningWorkspace) {
+                    window.addEventListener('pointermove', handlePointerMove);
+                    window.addEventListener('pointerup', handlePointerUp);
+                    window.addEventListener('touchmove', handlePointerMove, { passive: false });
+                    window.addEventListener('touchend', handlePointerUp);
+                }
+                return () => {
+                    window.removeEventListener('pointermove', handlePointerMove);
+                    window.removeEventListener('pointerup', handlePointerUp);
+                    window.removeEventListener('touchmove', handlePointerMove);
+                    window.removeEventListener('touchend', handlePointerUp);
+                };
+            }, [isDraggingNode, isPanningWorkspace, handlePointerMove, handlePointerUp]);
+
+            // Keyboard Shortcuts
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId && !editingNodeId) {
+                        deleteNode();
+                    }
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [selectedNodeId, editingNodeId, nodes]);
+
+            const renderConnections = () => {
+                return nodes.map(node => {
+                    if (!node.parentId) return null;
+                    const parent = nodes.find(n => n.id === node.parentId);
+                    if (!parent) return null;
+
+                    const parentWidth = 160; 
+                    const startX = parent.x + (parentWidth / 2);
+                    const startY = parent.y;
+                    const endX = node.x - (parentWidth / 2) + 20; 
+                    const endY = node.y;
+
+                    const controlPointOffset = Math.max(Math.abs(endX - startX) / 2, 50);
+                    const pathData = `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`;
+
+                    return (
+                        <path
+                            key={`conn-${node.id}`}
+                            d={pathData}
+                            fill="none"
+                            stroke="#cbd5e1"
+                            strokeWidth="3"
+                            className="transition-all duration-200"
+                        />
+                    );
+                });
+            };
+
+            return (
+                <div className="flex flex-col h-screen w-full bg-slate-50 font-sans overflow-hidden">
+                    
+                    {/* Header */}
+                    <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-3 flex justify-between items-center z-50 shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-sm flex items-center justify-center w-10 h-10">
+                                <i className="fa-solid fa-book-open"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-lg md:text-xl font-bold text-slate-800 leading-tight">EssayMap</h1>
+                                <p className="text-[10px] md:text-xs text-slate-500 font-medium uppercase tracking-wider">Web App</p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 md:gap-4">
+                            {/* Sync Status Indicator */}
+                            <div className="hidden md:flex items-center gap-2 text-xs font-medium mr-2 bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
+                                {syncStatus === 'synced' && <><i className="fa-solid fa-cloud-check text-emerald-500"></i><span className="text-emerald-600">Saved</span></>}
+                                {syncStatus === 'syncing' && <><i className="fa-solid fa-cloud-arrow-up text-amber-500 animate-pulse"></i><span className="text-amber-600">Saving...</span></>}
+                            </div>
+
+                            {/* File Controls */}
+                            <div className="flex items-center bg-slate-100 rounded-md p-1 shadow-inner border border-slate-200">
+                                <input type="file" accept=".json" ref={fileInputRef} onChange={importMap} className="hidden" />
+                                <button onClick={() => fileInputRef.current?.click()} className="p-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors" title="Load Map File">
+                                    <i className="fa-solid fa-upload"></i>
+                                </button>
+                                <div className="w-px h-4 bg-slate-300 mx-1"></div>
+                                <button onClick={exportMap} className="p-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors" title="Download Map (Save to Drive)">
+                                    <i className="fa-solid fa-download"></i>
+                                </button>
+                            </div>
+
+                            {/* Templates Menu */}
+                            <div className="relative">
+                                <button 
+                                    onClick={() => setShowTemplateMenu(!showTemplateMenu)}
+                                    className="flex items-center gap-2 px-3 md:px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-md font-medium text-sm transition-colors shadow-sm"
+                                >
+                                    <i className="fa-solid fa-table-list hidden md:inline"></i>
+                                    Templates
+                                    <i className={`fa-solid fa-chevron-down text-xs transition-transform ${showTemplateMenu ? 'rotate-180' : ''}`}></i>
+                                </button>
+                                
+                                {showTemplateMenu && (
+                                    <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-xl border border-slate-200 py-1 z-50">
+                                        <div className="px-3 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100 mb-1">Quick Start</div>
+                                        {Object.entries(TEMPLATES).map(([key, template]) => (
+                                            <button
+                                                key={key}
+                                                onClick={() => loadTemplate(key)}
+                                                className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex items-center gap-2"
+                                            >
+                                                <i className="fa-regular fa-file-lines opacity-50"></i>
+                                                {template.name}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Main Workspace Area */}
+                    <div className="flex flex-1 overflow-hidden relative">
+                        
+                        {/* Sidebar Toolkit */}
+                        <div className="w-16 md:w-20 bg-white border-r border-slate-200 flex flex-col items-center py-4 gap-4 z-40 shadow-sm overflow-y-auto">
+                            <div className="text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider text-center">Add<br/>Node</div>
+                            
+                            {Object.entries(NODE_TYPES).map(([key, type]) => {
+                                if (key === 'THESIS' && nodes.length > 0) return null;
+                                return (
+                                    <button
+                                        key={key}
+                                        onClick={() => addNode(key)}
+                                        className={`w-10 h-10 md:w-12 md:h-12 rounded-xl flex items-center justify-center transition-all hover:scale-110 active:scale-95 group relative
+                                            ${type.bgColor} ${type.textColor} shadow-sm hover:shadow-md border border-transparent`}
+                                        title={`Add ${type.label}`}
+                                    >
+                                        <i className={`fa-solid ${type.icon}`}></i>
+                                        <div className="absolute left-full ml-3 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg">
+                                            {type.label}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+
+                            <div className="w-8 h-px bg-slate-200 my-2"></div>
+                            
+                            <button 
+                                onClick={deleteNode}
+                                disabled={!selectedNodeId || selectedNodeId === 'root'}
+                                className="w-10 h-10 md:w-12 md:h-12 rounded-xl flex items-center justify-center text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent transition-colors group relative"
+                            >
+                                <i className="fa-solid fa-trash"></i>
+                                <div className="absolute left-full ml-3 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg">
+                                    Delete Node
+                                </div>
+                            </button>
+                        </div>
+
+                        {/* Interactive Canvas */}
+                        <div 
+                            ref={workspaceRef}
+                            className={`flex-1 relative overflow-hidden bg-slate-50 outline-none
+                                ${isPanningWorkspace ? 'cursor-grabbing' : 'cursor-grab'}`}
+                            onPointerDown={handlePointerDown}
+                            onTouchStart={handlePointerDown}
+                        >
+                            {/* Grid Background */}
+                            <div 
+                                className="absolute inset-0 opacity-20 pointer-events-none"
+                                style={{
+                                    backgroundImage: 'radial-gradient(circle at 2px 2px, #94a3b8 1px, transparent 0)',
+                                    backgroundSize: `${40 * zoom}px ${40 * zoom}px`,
+                                    backgroundPosition: `${pan.x}px ${pan.y}px`
+                                }}
+                            />
+
+                            {/* Transform Layer */}
+                            <div 
+                                className="absolute top-1/2 left-1/2 w-0 h-0"
+                                style={{ 
+                                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                                    transformOrigin: '0 0'
+                                }}
+                            >
+                                {/* Connections */}
+                                <svg className="absolute overflow-visible pointer-events-none" style={{ zIndex: 0 }}>
+                                    {renderConnections()}
+                                </svg>
+
+                                {/* Nodes */}
+                                {nodes.map(node => {
+                                    const typeStyle = NODE_TYPES[node.type] || NODE_TYPES.GENERAL;
+                                    const isSelected = selectedNodeId === node.id;
+                                    const isEditing = editingNodeId === node.id;
+
+                                    return (
+                                        <div
+                                            key={node.id}
+                                            className={`absolute flex flex-col items-center justify-center p-3 rounded-xl shadow-md border-2 transition-shadow
+                                                ${typeStyle.bgColor} ${typeStyle.textColor} ${isSelected ? `ring-4 ring-blue-300 ${typeStyle.borderColor}` : 'border-transparent'}
+                                                hover:shadow-lg ${isDraggingNode && isSelected ? 'cursor-grabbing shadow-2xl z-50 scale-105' : 'cursor-pointer z-10'}
+                                            `}
+                                            style={{
+                                                transform: `translate(calc(-50% + ${node.x}px), calc(-50% + ${node.y}px))`,
+                                                width: '180px',
+                                                minHeight: '80px',
+                                                userSelect: 'none'
+                                            }}
+                                            onPointerDown={(e) => handlePointerDown(e, node.id)}
+                                            onTouchStart={(e) => handlePointerDown(e, node.id)}
+                                            onDoubleClick={(e) => {
+                                                e.stopPropagation();
+                                                setEditingNodeId(node.id);
+                                            }}
+                                        >
+                                            <div className="absolute -top-3 flex items-center justify-center w-6 h-6 rounded-full bg-white shadow-sm border border-slate-200 text-slate-600">
+                                                <i className={`fa-solid ${typeStyle.icon} text-[10px]`}></i>
+                                            </div>
+
+                                            {isEditing ? (
+                                                <textarea
+                                                    ref={editInputRef}
+                                                    value={node.text}
+                                                    onChange={(e) => updateNodeText(node.id, e.target.value)}
+                                                    onBlur={() => setEditingNodeId(null)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                                            e.preventDefault();
+                                                            setEditingNodeId(null);
+                                                        }
+                                                        e.stopPropagation();
+                                                    }}
+                                                    className="w-full h-full min-h-[60px] bg-white text-slate-900 rounded p-2 text-sm text-center shadow-inner resize-none border border-blue-300"
+                                                />
+                                            ) : (
+                                                <p className="text-sm font-medium text-center w-full break-words leading-snug pointer-events-none">
+                                                    {node.text}
+                                                </p>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Viewport Controls */}
+                        <div className="absolute bottom-6 right-6 flex items-center bg-white/90 backdrop-blur rounded-lg shadow-lg border border-slate-200 p-1 z-40">
+                            <button onClick={() => setZoom(z => Math.max(0.3, z - 0.1))} className="p-2 hover:bg-slate-100 rounded text-slate-600 transition-colors">
+                                <i className="fa-solid fa-magnifying-glass-minus"></i>
+                            </button>
+                            <span className="text-xs font-bold text-slate-600 w-12 text-center">
+                                {Math.round(zoom * 100)}%
+                            </span>
+                            <button onClick={() => setZoom(z => Math.min(2, z + 0.1))} className="p-2 hover:bg-slate-100 rounded text-slate-600 transition-colors">
+                                <i className="fa-solid fa-magnifying-glass-plus"></i>
+                            </button>
+                            <div className="w-px h-6 bg-slate-200 mx-1"></div>
+                            <button onClick={centerWorkspace} className="p-2 hover:bg-slate-100 rounded text-slate-600 transition-colors" title="Center Map">
+                                <i className="fa-solid fa-compress"></i>
+                            </button>
+                        </div>
+
+                        {/* Instructions Overlay */}
+                        <div className="absolute bottom-24 right-6 hidden md:block bg-white/90 backdrop-blur text-slate-600 text-xs px-4 py-3 rounded-lg border border-slate-200 shadow-sm z-30 pointer-events-none">
+                            <strong><i className="fa-solid fa-circle-info mr-1"></i> Quick Tips</strong>
+                            <ul className="mt-1 space-y-1">
+                                <li>• Click and drag the background to pan.</li>
+                                <li>• Double-click any node to edit text.</li>
+                                <li>• Select a node and press <strong>Delete</strong> to remove it.</li>
+                            </ul>
+                        </div>
+
+                        {/* Toast Notification */}
+                        {notification && (
+                            <div className={`absolute top-6 left-1/2 transform -translate-x-1/2 px-4 py-2 rounded-md shadow-lg text-sm font-medium z-50 transition-all ${notification.isError ? 'bg-red-500 text-white' : 'bg-slate-800 text-white'}`}>
+                                {notification.isError ? <i className="fa-solid fa-triangle-exclamation mr-2"></i> : <i className="fa-solid fa-check-circle mr-2"></i>}
+                                {notification.message}
+                            </div>
+                        )}
+                    </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
+            );
+        }
 
-        {/* View Controls (Zoom/Center) */}
-        <div className="absolute bottom-6 right-6 flex items-center bg-white rounded-lg shadow-md border border-slate-200 p-1 z-20">
-          <button onClick={() => setZoom(z => Math.max(0.4, z - 0.1))} className="p-2 hover:bg-slate-100 rounded text-slate-600">
-            <ZoomOut size={18} />
-          </button>
-          <span className="text-xs font-medium text-slate-600 w-12 text-center">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button onClick={() => setZoom(z => Math.min(2, z + 0.1))} className="p-2 hover:bg-slate-100 rounded text-slate-600">
-            <ZoomIn size={18} />
-          </button>
-          <div className="w-px h-6 bg-slate-200 mx-1"></div>
-          <button onClick={centerWorkspace} className="p-2 hover:bg-slate-100 rounded text-slate-600" title="Center Workspace">
-            <Maximize size={18} />
-          </button>
-        </div>
-
-        {/* Quick Instructions Overlay */}
-        <div className="absolute bottom-6 left-20 bg-white/80 backdrop-blur text-slate-500 text-xs px-4 py-2 rounded-lg border border-slate-200 shadow-sm z-20 pointer-events-none">
-          <strong>Tips:</strong> Drag canvas to pan • Double-click node to edit • Select & press Delete to remove
-        </div>
-
-      </div>
-    </div>
-  );
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
